@@ -28,6 +28,12 @@ public struct ACarousel<Data, ID, Content> : View where Data : RandomAccessColle
     private var viewModel: ACarouselViewModel<Data, ID>
     private let content: (Data.Element) -> Content
     
+    /// Defines when to fire dragEnded
+    /// Workaround for preventing dragEnded to be cancelled by ScrollView
+    /// ScrollView can cancel child view's DragGesture.onEnded
+    @GestureState
+    var isGestureActive = false
+    
     public var body: some View {
         GeometryReader { proxy -> AnyView in
             viewModel.viewSize = proxy.size
@@ -45,7 +51,17 @@ public struct ACarousel<Data, ID, Content> : View where Data : RandomAccessColle
         }
         .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         .offset(x: viewModel.offset)
-        .highPriorityGesture(viewModel.dragGesture)
+        .highPriorityGesture(viewModel.dragGesture
+            .updating($isGestureActive) { _, state, _ in
+                state = true
+            }
+        )
+        .onChange(of: isGestureActive) { value in
+            guard !value else {
+                return
+            }
+            viewModel.dragEnded()
+        }
         .animation(viewModel.offsetAnimation, value: viewModel.offset)
         .onReceive(timer: viewModel.timer, perform: viewModel.receiveTimer)
         .onReceiveAppLifeCycle(perform: viewModel.setTimerActive)
@@ -73,10 +89,13 @@ extension ACarousel {
     ///   - isWrap: Define views to scroll through in a loop, default is false.
     ///   - autoScroll: A enum that define view to scroll automatically. See
     ///     ``ACarouselAutoScroll``. default is `inactive`.
+    ///   - dragThresholdRatio: Defines the drag threshold.
+    ///     At the end of the drag, if the drag value exceeds the drag threshold, the active view will be toggled
+    ///     default is 0.33, which sets threshold one third of itemViewWidth
     ///   - content: The view builder that creates views dynamically.
-    public init(_ data: Data, id: KeyPath<Data.Element, ID>, index: Binding<Int> = .constant(0), spacing: CGFloat = 10, headspace: CGFloat = 10, sidesScaling: CGFloat = 0.8, isWrap: Bool = false, autoScroll: ACarouselAutoScroll = .inactive, canMove: Bool = true, @ViewBuilder content: @escaping (Data.Element) -> Content) {
+    public init(_ data: Data, id: KeyPath<Data.Element, ID>, index: Binding<Int> = .constant(0), spacing: CGFloat = 10, headspace: CGFloat = 10, sidesScaling: CGFloat = 0.8, isWrap: Bool = false, autoScroll: ACarouselAutoScroll = .inactive, dragThresholdRatio: CGFloat = 0.33, canMove: Bool = true, @ViewBuilder content: @escaping (Data.Element) -> Content) {
         
-        self.viewModel = ACarouselViewModel(data, id: id, index: index, spacing: spacing, headspace: headspace, sidesScaling: sidesScaling, isWrap: isWrap, autoScroll: autoScroll, canMove: canMove)
+        self.viewModel = ACarouselViewModel(data, id: id, index: index, spacing: spacing, headspace: headspace, sidesScaling: sidesScaling, isWrap: isWrap, autoScroll: autoScroll, dragThresholdRatio: dragThresholdRatio, canMove: canMove)
         self.content = content
     }
     
@@ -99,10 +118,13 @@ extension ACarousel where ID == Data.Element.ID, Data.Element : Identifiable {
     ///   - isWrap: Define views to scroll through in a loop, default is false.
     ///   - autoScroll: A enum that define view to scroll automatically. See
     ///     ``ACarouselAutoScroll``. default is `inactive`.
+    ///   - dragThresholdRatio: Defines the drag threshold.
+    ///     At the end of the drag, if the drag value exceeds the drag threshold, the active view will be toggled
+    ///     default is 0.33, which sets threshold one third of itemViewWidth
     ///   - content: The view builder that creates views dynamically.
-    public init(_ data: Data, index: Binding<Int> = .constant(0), spacing: CGFloat = 10, headspace: CGFloat = 10, sidesScaling: CGFloat = 0.8, isWrap: Bool = false, autoScroll: ACarouselAutoScroll = .inactive, canMove: Bool = true, @ViewBuilder content: @escaping (Data.Element) -> Content) {
+    public init(_ data: Data, index: Binding<Int> = .constant(0), spacing: CGFloat = 10, headspace: CGFloat = 10, sidesScaling: CGFloat = 0.8, isWrap: Bool = false, autoScroll: ACarouselAutoScroll = .inactive, dragThresholdRatio: Double = 0.33, canMove: Bool = true, @ViewBuilder content: @escaping (Data.Element) -> Content) {
         
-        self.viewModel = ACarouselViewModel(data, index: index, spacing: spacing, headspace: headspace, sidesScaling: sidesScaling, isWrap: isWrap, autoScroll: autoScroll, canMove: canMove)
+        self.viewModel = ACarouselViewModel(data, index: index, spacing: spacing, headspace: headspace, sidesScaling: sidesScaling, isWrap: isWrap, autoScroll: autoScroll, dragThresholdRatio: dragThresholdRatio, canMove: canMove)
         self.content = content
     }
     

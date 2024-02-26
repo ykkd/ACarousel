@@ -36,8 +36,9 @@ class ACarouselViewModel<Data, ID>: ObservableObject where Data : RandomAccessCo
     private let _sidesScaling: CGFloat
     private let _autoScroll: ACarouselAutoScroll
     private let _canMove: Bool
+    private let _dragThresholdRatio: Double
     
-    init(_ data: Data, id: KeyPath<Data.Element, ID>, index: Binding<Int>, spacing: CGFloat, headspace: CGFloat, sidesScaling: CGFloat, isWrap: Bool, autoScroll: ACarouselAutoScroll, canMove: Bool) {
+    init(_ data: Data, id: KeyPath<Data.Element, ID>, index: Binding<Int>, spacing: CGFloat, headspace: CGFloat, sidesScaling: CGFloat, isWrap: Bool, autoScroll: ACarouselAutoScroll, dragThresholdRatio: Double, canMove: Bool) {
         
         guard index.wrappedValue < data.count else {
             fatalError("The index should be less than the count of data ")
@@ -51,6 +52,7 @@ class ACarouselViewModel<Data, ID>: ObservableObject where Data : RandomAccessCo
         self._sidesScaling = sidesScaling
         self._autoScroll = autoScroll
         self._canMove = canMove
+        self._dragThresholdRatio = dragThresholdRatio
         
         if data.count > 1 && isWrap {
             activeIndex = index.wrappedValue + 1
@@ -85,7 +87,6 @@ class ACarouselViewModel<Data, ID>: ObservableObject where Data : RandomAccessCo
     /// size of GeometryProxy
     var viewSize: CGSize = .zero
     
-    
     /// Counting of time
     /// work when `isTimerActive` is true
     /// Toggles the active subviewview and resets if the count is the same as
@@ -96,6 +97,9 @@ class ACarouselViewModel<Data, ID>: ObservableObject where Data : RandomAccessCo
     /// Ignores listen while dragging, and listen again after the drag is over
     /// Ignores listen when App will resign active, and listen again when it become active
     private var isTimerActive = true
+    
+    private var lastDragTranslationWidth: CGFloat = .zero
+    
     func setTimerActive(_ active: Bool) {
         isTimerActive = active
     }
@@ -105,8 +109,8 @@ class ACarouselViewModel<Data, ID>: ObservableObject where Data : RandomAccessCo
 
 extension ACarouselViewModel where ID == Data.Element.ID, Data.Element : Identifiable {
     
-    convenience init(_ data: Data, index: Binding<Int>, spacing: CGFloat, headspace: CGFloat, sidesScaling: CGFloat, isWrap: Bool, autoScroll: ACarouselAutoScroll, canMove: Bool) {
-        self.init(data, id: \.id, index: index, spacing: spacing, headspace: headspace, sidesScaling: sidesScaling, isWrap: isWrap, autoScroll: autoScroll, canMove: canMove)
+    convenience init(_ data: Data, index: Binding<Int>, spacing: CGFloat, headspace: CGFloat, sidesScaling: CGFloat, isWrap: Bool, autoScroll: ACarouselAutoScroll, dragThresholdRatio: Double, canMove: Bool) {
+        self.init(data, id: \.id, index: index, spacing: spacing, headspace: headspace, sidesScaling: sidesScaling, isWrap: isWrap, autoScroll: autoScroll, dragThresholdRatio: dragThresholdRatio, canMove: canMove)
     }
 }
 
@@ -136,9 +140,9 @@ extension ACarouselViewModel {
     
     var offsetAnimation: Animation? {
         guard isWrap else {
-            return .smooth()
+            return .linear
         }
-        return isAnimatedOffset ? .smooth() : .none
+        return isAnimatedOffset ? .linear : .none
     }
     
     var itemWidth: CGFloat {
@@ -212,18 +216,19 @@ extension ACarouselViewModel {
         }
         
         let minimumOffset = defaultPadding
-        let maxinumOffset = defaultPadding - CGFloat(data.count - 1) * itemActualWidth
+        let maximumOffset = defaultPadding - CGFloat(data.count - 1) * itemActualWidth
         
-        if offset == minimumOffset {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self.activeIndex = self.data.count - 2
-                self.isAnimatedOffset = false
-            }
-        } else if offset == maxinumOffset {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self.activeIndex = 1
-                self.isAnimatedOffset = false
-            }
+        let isMinimumOffset = offset == minimumOffset
+        let isMaximumOffset = offset == maximumOffset
+        
+        Task { try? await  Task.sleep(seconds: 0.1) }
+        
+        if isMinimumOffset {
+            self.activeIndex = self.data.count - 2
+            self.isAnimatedOffset = false
+        } else if isMaximumOffset {
+            self.activeIndex = 1
+            self.isAnimatedOffset = false
         }
     }
 }
@@ -234,13 +239,12 @@ extension ACarouselViewModel {
     var dragGesture: some Gesture {
         DragGesture()
             .onChanged(dragChanged)
-            .onEnded(dragEnded)
     }
     
     private func dragChanged(_ value: DragGesture.Value) {
         guard _canMove else { return }
-        
         isAnimatedOffset = true
+        lastDragTranslationWidth = value.translation.width
         
         /// Defines the maximum value of the drag
         /// Avoid dragging more than the values of multiple subviews at the end of the drag,
@@ -259,7 +263,7 @@ extension ACarouselViewModel {
         isTimerActive = false
     }
     
-    private func dragEnded(_ value: DragGesture.Value) {
+    func dragEnded() {
         guard _canMove else { return }
         /// reset drag offset
         dragOffset = .zero
@@ -268,17 +272,14 @@ extension ACarouselViewModel {
         resetTiming()
         isTimerActive = true
         
-        /// Defines the drag threshold
-        /// At the end of the drag, if the drag value exceeds the drag threshold,
-        /// the active view will be toggled
-        /// default is one third of subview
-        let dragThreshold: CGFloat = itemWidth / 3
+        let dragThreshold = itemWidth * self._dragThresholdRatio
         
         var activeIndex = self.activeIndex
-        if value.translation.width > dragThreshold {
+
+        if lastDragTranslationWidth > dragThreshold {
             activeIndex -= 1
         }
-        if value.translation.width < -dragThreshold {
+        if lastDragTranslationWidth < -dragThreshold {
             activeIndex += 1
         }
         self.activeIndex = max(0, min(activeIndex, data.count - 1))
@@ -297,7 +298,7 @@ extension ACarouselViewModel {
         /// increments of one and compare to the scrolling duration
         /// return when timing less than duration
         activeTiming()
-        timing += 1
+        
         if timing < autoScroll.interval {
             return
         }
